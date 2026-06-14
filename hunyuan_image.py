@@ -60,6 +60,26 @@ def query_image(task_id: str) -> dict:
     return resp.json()
 
 
+def parse_response(result):
+    """从各种可能的响应格式中提取图片 URL 和状态"""
+    # 混元 API 常见格式：{"status": "completed", "data": [{"url": "..."}]}
+    if isinstance(result, dict):
+        status = result.get("status", "").lower()
+        data = result.get("data", [])
+        if isinstance(data, list) and data:
+            image_url = data[0].get("url")
+        else:
+            image_url = data.get("url") if isinstance(data, dict) else None
+        return image_url, status
+
+    # 其他列表格式兜底
+    if isinstance(result, list):
+        first = result[0] if result else {}
+        return first.get("url"), first.get("status", "").lower()
+
+    return None, "unknown"
+
+
 def wait_and_download(task_id: str, output_path: str, max_wait: int = 120) -> str:
     """轮询等待图片生成完成，然后下载"""
     print(f"⏳ 等待图片生成（最多 {max_wait} 秒）...")
@@ -67,20 +87,12 @@ def wait_and_download(task_id: str, output_path: str, max_wait: int = 120) -> st
 
     while time.time() - start < max_wait:
         result = query_image(task_id)
-        status = (result.get("status") or result.get("data", {}).get("status") or "").lower()
+        image_url, status = parse_response(result)
 
         elapsed = int(time.time() - start)
         print(f"  [{elapsed}s] 状态: {status}")
 
         if status == "success" or status == "completed" or status == "done":
-            # 取图片 URL
-            image_url = (
-                result.get("data", {}).get("image_url")
-                or result.get("image_url")
-                or result.get("url")
-                or result.get("images", [{}])[0].get("url")
-                or result.get("data", {}).get("url")
-            )
             if image_url:
                 print(f"🖼️  下载图片...")
                 img_resp = requests.get(image_url, timeout=60)
@@ -90,10 +102,10 @@ def wait_and_download(task_id: str, output_path: str, max_wait: int = 120) -> st
                 print(f"✅ 图片已保存: {output_path}")
                 return output_path
             else:
-                print(f"⚠️  状态成功但未找到图片 URL，返回内容: {json.dumps(result, ensure_ascii=False)[:300]}")
+                print(f"⚠️  状态成功但未找到图片 URL，返回内容: {str(result)[:300]}")
 
         elif status == "failed" or status == "error":
-            raise Exception(f"生成失败: {json.dumps(result, ensure_ascii=False)}")
+            raise Exception(f"生成失败: {str(result)}")
 
         time.sleep(5)
 
